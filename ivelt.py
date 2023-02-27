@@ -149,7 +149,7 @@ class phpBB(object):
             form['values']['post'] = 'Submit'
 
             if image:
-                form['values']['uploadfile'] = (image, open(image, 'rb').read())
+                form['values']['fileupload'] = (image, open(image, 'rb').read())
 
             body, content_type = self._encode_multipart_formdata(form['values'])
             headers = {'Content-Type': content_type}
