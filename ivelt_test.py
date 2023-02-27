@@ -7,4 +7,5 @@ with open("cfg.json", 'r', encoding='utf-8') as f:
 forum = phpBB()
 
 if forum.login(cfg["username"], cfg["password"]):
-    forum.postReply(cfg["topic_id"], cfg["message"])
+    post_id = forum.postReply(cfg["topic_id"], cfg["message"], image="1.jpg")
+    print(post_id)

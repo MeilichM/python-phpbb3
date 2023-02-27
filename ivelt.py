@@ -7,7 +7,7 @@ import mimetypes
 import http.cookiejar
 from io import BytesIO
 from time import sleep
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from urllib.parse import urlparse, urlencode, urljoin
 from urllib.request import build_opener, install_opener
 from urllib.request import Request, HTTPCookieProcessor
@@ -101,7 +101,7 @@ class phpBB(object):
         headers['User-Agent'] = self.user_agent
         request = Request(url, headers=headers)
         resp = self.opener.open(request)
-        soup = BeautifulSoup(resp, features="lxml")
+        soup = BeautifulSoup(resp, "lxml")
         self.opener.close()
         return soup
 
@@ -141,27 +141,35 @@ class phpBB(object):
         return False
     
 
-    def postReply(self, topic, message):
+    def postReply(self, topic, message, image = None):
         url = urljoin(self.host, self.reply_url.format(topic))
         try:
             form = self._get_form(url, self.reply_form_id)
             form['values']['message'] = message
             form['values']['post'] = 'Submit'
+
+            if image:
+                form['values']['uploadfile'] = (image, open(image, 'rb').read())
+
             body, content_type = self._encode_multipart_formdata(form['values'])
             headers = {'Content-Type': content_type}
 
-            # wait at least 2 seconds so phpBB let us post
+            # wait at least 2 seconds so phpBB lets us post
             sleep(2)
 
             html = self._send_query(url, body, headers, encode=False)
-            soup = BeautifulSoup(BytesIO(html), features="lxml")
-            resp = soup.find("div", id="message")
+            soup = BeautifulSoup(BytesIO(html), 'lxml')
+            resp: Tag = soup.find_all('div', class_='post')[-1]
+            
             if resp:
-                print(f'>>> {resp.p.find(text=True, recursive=False)}')
+                return resp.get("id").replace("p", "")
             else:
                 print('>>> no message')
+                return
+
         except HTTPError as e:
             print(f'>>> Error {e.code}: {e.msg}')
+            return
 
 
     def changeAvatar(self, imagefile):
