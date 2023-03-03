@@ -8,7 +8,7 @@ import http.cookiejar
 from io import BytesIO
 from time import sleep
 from bs4 import BeautifulSoup, Tag
-from urllib.parse import urlparse, urlencode, urljoin
+from urllib.parse import urlencode, urljoin
 from urllib.request import build_opener, install_opener
 from urllib.request import Request, HTTPCookieProcessor
 from urllib.error import HTTPError
@@ -18,22 +18,17 @@ class phpBB(object):
     host = "https://www.ivelt.com/forum/"
 
     login_url = 'ucp.php?mode=login'
-    post_url = 'viewtopic.php?f=%s&t=%i&p=%i#p%i'
-    reply_url = 'posting.php?mode=reply&t={}'
-    userpost_url = 'search.php?st=0&sk=t&sd=d&sr=posts&author_id=%i&start=%i'
-    profile_url = 'memberlist.php?mode=viewprofile&u=%i'
-    search_url = 'search.php?st=0&sk=t&sd=d&sr=posts&search_id=%s&start=%i'
-    member_url = 'memberlist.php?sk=c&sd=d&start=%i'
-    details_url = 'mcp.php?i=main&mode=post_details&f=%i&p=%i'
 
-    user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:61.0) Gecko/20100101 Firefox/61.0'
+    reply_topic = 'posting.php?mode=reply&t={}'
+    reply_post = 'posting.php?mode=quote&p={}'
 
-    login_cookie_pattern = 'phpbb3_.*_u'
+    manual_quote_format = "[quote={} post_id={} time={} user_id={}][/quote]\n"
 
     login_form_id = 'login'
-    delete_form_id = 'confirm'
     reply_form_id = 'postform'
-    ucp_form_id = 'ucp'
+
+    user_agent = 'Mozilla/5.0 (X11; Linux x86_64; rv:61.0) Gecko/20100101 Firefox/61.0'
+    login_cookie_pattern = 'phpbb3_.*_u'
 
     def __init__(self):
         self.jar = http.cookiejar.CookieJar()
@@ -76,26 +71,6 @@ class phpBB(object):
     def _get_content_type(self, filename):
         return mimetypes.guess_type(filename)[0] or 'application/octet-stream'
 
-    def _send_query(self, url, query, extra_headers=None, encode=True):
-        headers = {'User-Agent': self.user_agent}
-
-        if extra_headers:
-            headers.update(extra_headers)
-
-        if encode:
-            data = bytes(urlencode(query), 'utf-8')
-        else:
-            if not isinstance(query, bytes):
-                data = bytes(query, 'utf-8')
-            else:
-                data = query
-
-        request = Request(url, data, headers)
-        resp = self.opener.open(request)
-        html = resp.read()
-        self.opener.close()
-        return html
-
     def _get_html(self, url):
         headers = {}
         headers['User-Agent'] = self.user_agent
@@ -123,6 +98,32 @@ class phpBB(object):
             values[input['name']] = input['value']
         return {'values': values, 'action': soup['action']}
 
+    def _send_query(self, url, query, extra_headers=None, encode=True):
+        headers = {'User-Agent': self.user_agent}
+
+        if extra_headers:
+            headers.update(extra_headers)
+
+        if encode:
+            data = bytes(urlencode(query), 'utf-8')
+        else:
+            if not isinstance(query, bytes):
+                data = bytes(query, 'utf-8')
+            else:
+                data = query
+
+        request = Request(url, data, headers)
+        resp = self.opener.open(request)
+        html = resp.read()
+        self.opener.close()
+        return html
+    
+    def _get_post_id(posts: list[Tag]):
+        for post in posts:
+            post_id = post.get("id").replace("p", "")
+            if post_id.isnumeric():
+                return int(post_id)
+
 
 
     def login(self, username, password):
@@ -141,55 +142,45 @@ class phpBB(object):
         return False
     
 
-    def postReply(self, topic, message, image = None):
-        url = urljoin(self.host, self.reply_url.format(topic))
+
+    def respond(self, topic: int, message: str, image: str = None, reply_to: tuple[int, int] = None):
+        url = urljoin(self.host, self.reply_topic.format(topic))
         try:
+            # if reply_to:
+            #     quote = self.manual_quote_format.format('אידישליך', 4151780, 1677524972, 22552)
+            #     message = quote + message
+
             form = self._get_form(url, self.reply_form_id)
             form['values']['message'] = message
             form['values']['post'] = 'Submit'
+            form['values']['attach_sig'] = 1
 
             if image:
                 form['values']['fileupload'] = (image, open(image, 'rb').read())
+                # form['values']["attachment_data[0][real_filename]"] = image
+                form['values']['message'] = message + f"\n\n[attachment=0]{image}[/attachment]"
 
             body, content_type = self._encode_multipart_formdata(form['values'])
             headers = {'Content-Type': content_type}
 
-            # wait at least 2 seconds so phpBB lets us post
             sleep(2)
-
             html = self._send_query(url, body, headers, encode=False)
+
             soup = BeautifulSoup(BytesIO(html), 'lxml')
-            resp: Tag = soup.find_all('div', class_='post')[-1]
-            
-            if resp:
-                return resp.get("id").replace("p", "")
-            else:
+            posts: list[Tag] = soup.find_all('div', class_='post').reverse()
+
+            if not posts:
                 print('>>> no message')
                 return
+            
+            post_id: int = self._get_post_id(posts)
+            creation_time: int = int(form['values']['creation_time'])
+            return post_id, creation_time
 
         except HTTPError as e:
             print(f'>>> Error {e.code}: {e.msg}')
             return
 
 
-    def changeAvatar(self, imagefile):
-        url = urljoin(self.host, self.profile_url % 'avatar')
-        form = self._get_form(url, self.ucp_form_id)
-        form['values']['uploadfile'] = (imagefile, open(imagefile, 'rb').read())
-        form['values']['submit'] = 'Submit'
-        body, content_type = self._encode_multipart_formdata(form['values'])
-        headers = {'Content-Type': content_type, 'Content-length': str(len(body)), 'Referer': url}
-
-        """ wait at least 2 seconds so phpBB let us post """
-        sleep(2)
-
-        html = self._send_query(url, body, headers, encode=False)
-        soup = BeautifulSoup(BytesIO(html))
-        error_msg = soup.find("div", id=self.ucp_form_id).find("p", "error").text
-        if error_msg:
-            print('Error: %s' % error_msg)
-        resp = soup.find("div", id="message")
-        if resp:
-            print('>>> %s' % resp.p.text)
-        else:
-            print('>>> no message')
+    def reply(self, post: int, message: str, image: str = None):
+        url = urljoin(self.host, self.reply_post.format(post)) 
